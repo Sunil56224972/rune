@@ -1,0 +1,1 @@
+- `rune_kit::diff::DiffState` and `DiffView` no longer overflow `u32` chunk bounds in `highlights` or collide virtual row keys when rendering patches with `u32::MAX` or overlapping hunk line numbers.
