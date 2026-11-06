@@ -117,3 +117,26 @@ fn an_image_source_set_gets_sizes_from_every_width() {
     // `aspect-ratio` or height decides, so the reset sits under every class (`:where`).
     assert!(css.contains(":where([data-rune-static]) img{height:auto}"), "{css}");
 }
+
+#[test]
+fn strips_disallowed_link_schemes_and_css_breaking_font_characters() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let mut style = crate::tok::type_::BODY;
+        style.family = crate::tok::Family::Named("Evil\\\n\";}</style><script>".into());
+        crate::col().key("root").w_full().role("main")
+            .child(crate::row().key("bad-el").href("javascript:evil()").child(crate::text("Bad element link")))
+            .child(crate::row().key("rel-el").href("/docs#install").child(crate::text("Docs")))
+            .child(crate::rich("Inline bad and good links", vec![]).font(style)
+                .link(crate::Link::new(7..10, "javascript:evil()"))
+                .link(crate::Link::new(15..19, "https://example.com/ok")))
+    }
+    let mut rt = Runtime::new((), view, (400.0, 600.0), Env::default());
+    rt.page_mode();
+    let nodes = taken(&mut rt, 400.0);
+    let (body, css) = page(&[(400.0, nodes)]);
+    assert!(!body.contains("javascript:"), "disallowed schemes must not export as href: {body}");
+    assert!(body.contains("href=\"/docs#install\""), "page-relative links still export: {body}");
+    assert!(body.contains("Inline bad and <a href=\"https://example.com/ok\">good</a> links"), "{body}");
+    assert!(!css.contains("</style") && !css.contains('\\') && !css.contains('\n'), "font-family must stay inside its CSS string: {css}");
+    assert!(css.contains("font-family:\"Evilscript\""), "{css}");
+}

@@ -249,12 +249,20 @@ function webLink(url) {
     return url.startsWith('https://') || url.startsWith('http://') || url.startsWith('mailto:');
 }
 
+function safeHref(url) {
+    if (typeof url !== 'string') return false;
+    const s = url.trim();
+    if (!s || /[\s\u0000-\u001f\u007f"<>\\`^{|}]/.test(s)) return false;
+    if (webLink(s)) return true;
+    return !s.startsWith('//') && /^[^:]*([/?#]|$)/.test(s);
+}
+
 const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', text: 'p', scroll_x: 'div' };
 
 function family(name) {
     if (name === 'sans') return 'var(--rune-sans,sans-serif)';
     if (name === 'mono') return 'var(--rune-mono,monospace)';
-    return `"${name.replace(/["\\]/g, '')}",var(--rune-sans,sans-serif)`;
+    return `"${name.replace(/[\u0000-\u001f\u007f"'\\;{}<>]/g, '')}",var(--rune-sans,sans-serif)`;
 }
 
 // The mirror's first item element, after its stylesheet.
@@ -350,8 +358,16 @@ export function syncA11y(h, json) {
         if (item.k === 'group' || item.k === 'image') {
             if (item.t) el.setAttribute('aria-label', item.t); else el.removeAttribute('aria-label');
         } else if (item.k === 'link') {
-            el.href = item.h;
-            if (!h.page && webLink(item.h)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
+            if (safeHref(item.h)) {
+                const href = item.h.trim();
+                el.href = href;
+                if (!h.page && webLink(href)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
+                else { el.removeAttribute('target'); el.removeAttribute('rel'); }
+            } else {
+                el.removeAttribute('href');
+                el.removeAttribute('target');
+                el.removeAttribute('rel');
+            }
         }
         const container = item.k === 'group' || item.k === 'scroll_x';
         if (item.k === 'scroll_x' && el._path !== item.p) { el._path = item.p; h.scrollEls.set(item.p, el); }

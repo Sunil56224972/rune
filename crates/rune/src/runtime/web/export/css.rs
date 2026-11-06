@@ -220,7 +220,12 @@ fn family(f: crate::tok::Family) -> String {
     match f {
         crate::tok::Family::Sans => "var(--rune-sans)".into(),
         crate::tok::Family::Mono | crate::tok::Family::SystemMono => "var(--rune-mono)".into(),
-        crate::tok::Family::Named(name) => format!("\"{}\"", escape(name)),
+        crate::tok::Family::Named(name) => {
+            let clean: String = name.chars()
+                .filter(|c| !c.is_control() && !matches!(c, '"' | '\'' | '\\' | ';' | '{' | '}' | '<' | '>'))
+                .collect();
+            format!("\"{clean}\"")
+        }
     }
 }
 
@@ -264,11 +269,16 @@ pub(super) fn text_html(spec: &TextSpec) -> String {
     let mut open_link: Option<usize> = None;
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
-        let link = spec.links.iter().position(|l| (l.start as usize) <= a && b <= l.end as usize);
-        if link != open_link {
+        let link = spec.links.iter().position(|l| (l.start as usize) <= a && b <= l.end as usize)
+            .and_then(|k| crate::open_url::check_href(&spec.links[k].id).ok().map(|href| (k, href)));
+        if link.as_ref().map(|(k, _)| *k) != open_link {
             if open_link.is_some() { out.push_str("</a>"); }
-            if let Some(k) = link { let _ = write!(out, "<a href=\"{}\">", escape(&spec.links[k].id)); }
-            open_link = link;
+            if let Some((k, href)) = link {
+                let _ = write!(out, "<a href=\"{}\">", escape(&href));
+                open_link = Some(k);
+            } else {
+                open_link = None;
+            }
         }
         let piece = escape(&content[a..b]);
         let mut style = String::new();

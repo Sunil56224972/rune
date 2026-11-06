@@ -193,3 +193,28 @@ fn mac_meta_copy_and_select_all_work_on_selectable_text() {
     crate::clipboard::flush_memory(&mut rt);
     assert_eq!(board.text().as_deref().map(String::as_str), Some("First paragraph\nSecond paragraph"));
 }
+
+#[test]
+fn mirror_rejects_disallowed_link_schemes_and_sanitizes_font_names() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let mut style = crate::tok::type_::BODY;
+        style.family = crate::tok::Family::Named("Custom\\\n\";color:red".into());
+        crate::col().w_full().role("main")
+            .child(crate::row().key("js-link").href("javascript:evil()").child(crate::text("Bad link")))
+            .child(crate::row().key("rel-link").href("/docs#top").child(crate::text("Relative link")))
+            .child(crate::rich("Click bad or ok", vec![]).font(style).selectable(true)
+                .link(crate::Link::new(6..9, "javascript:evil()"))
+                .link(crate::Link::new(13..15, "https://example.com/ok")))
+    }
+    let mut rt = Runtime::new((), view, (480.0, 300.0), Env::default());
+    rt.page_mode();
+    rt.frame(0.0);
+    let items = rt.web_a11y_items();
+    assert!(!items.iter().any(|i| i.href.as_deref() == Some("javascript:evil()")), "{items:?}");
+    let rel = items.iter().find(|i| i.kind == "link").expect("relative link mirrors");
+    assert_eq!(rel.href.as_deref(), Some("/docs#top"));
+    let rich = items.iter().find(|i| !i.runs.is_empty()).expect("rich text mirrors");
+    assert_eq!(rich.runs[1].href.as_deref(), Some("#"));
+    assert_eq!(rich.runs[3].href.as_deref(), Some("https://example.com/ok"));
+    assert_eq!(rich.font.as_ref().map(|f| f.family.as_str()), Some("Customcolor:red"));
+}

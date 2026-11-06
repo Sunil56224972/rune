@@ -131,7 +131,9 @@ pub(crate) fn family_name(family: crate::tok::Family) -> String {
     match family {
         crate::tok::Family::Sans => "sans".into(),
         crate::tok::Family::Mono | crate::tok::Family::SystemMono => "mono".into(),
-        crate::tok::Family::Named(name) => name.into(),
+        crate::tok::Family::Named(name) => name.chars()
+            .filter(|c| !c.is_control() && !matches!(c, '"' | '\'' | '\\' | ';' | '{' | '}' | '<' | '>'))
+            .collect(),
     }
 }
 
@@ -184,7 +186,7 @@ fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
             if !label.is_empty() {
                 out.push(A11yRun {
                     text: label,
-                    href: Some(link.id.clone()),
+                    href: Some(crate::open_url::check_href(&link.id).unwrap_or_else(|_| "#".into())),
                     path: Some(path.to_owned()),
                     link: Some(idx),
                 });
@@ -333,7 +335,7 @@ impl<S: 'static> Runtime<S> {
                 i += 1;
                 continue;
             }
-            if let Some(href) = n.a11y.more.as_ref().and_then(|m| m.href.clone()) {
+            if let Some(href) = n.a11y.more.as_ref().and_then(|m| m.href.as_deref()).and_then(|h| crate::open_url::check_href(h).ok()) {
                 let label = n.label.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| self.descendant_label(i, end));
                 if !label.is_empty() && rect[2] > 0.0 && rect[3] > 0.0 {
                     let mut item = A11yItem::new("link", &n.path, rect);

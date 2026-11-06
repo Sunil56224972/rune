@@ -1,0 +1,1 @@
+- Web accessibility mirror (`web_a11y`) and static HTML export (`--html`) now validate link `href` targets against the `http:`, `https:`, `mailto:` and page-relative allowlist, and strip CSS-breaking characters from custom `Family::Named` font names.
