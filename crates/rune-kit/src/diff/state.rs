@@ -325,7 +325,7 @@ impl DiffState {
     pub fn hidden(&self, file: usize, gap: usize) -> Option<u32> {
         let g = self.gaps.get(file)?.get(gap)?;
         let (top, bottom) = self.ui[file].revealed[gap];
-        g.len.map(|n| n.saturating_sub(top + bottom))
+        g.len.map(|n| n.saturating_sub(top.saturating_add(bottom)))
     }
 
     /// Reveal more of `file`'s unchanged range before hunk `gap` (`hunks.len()`: after the
@@ -504,7 +504,7 @@ impl DiffState {
             let gap = self.gaps.get(file).and_then(|g| {
                 g.iter().position(|g| {
                     let first = if at.side == Side::Old { g.old } else { g.new };
-                    at.line >= first && g.len.is_none_or(|n| at.line < first + n)
+                    at.line >= first && g.len.is_none_or(|n| at.line < first.saturating_add(n))
                 })
             });
             if let Some(gap) = gap {
@@ -690,12 +690,18 @@ impl DiffState {
     pub(crate) fn side_line(&self, f: usize, side: Side, n: u32) -> Option<&str> {
         let file = &self.files[f];
         let hunks = &file.hunks;
-        let h = hunks.partition_point(|h| h.end(side) <= n);
-        if let Some(hunk) = hunks.get(h).filter(|h| h.first(side) <= n) {
+        let end_u64 = |h: &super::model::Hunk| u64::from(h.first(side)) + u64::from(if side == Side::Old { h.old_count } else { h.new_count });
+        let h = hunks.partition_point(|h| end_u64(h) <= u64::from(n));
+        let found = hunks
+            .get(h)
+            .filter(|h| h.first(side) <= n)
+            .map(|hunk| (h, hunk))
+            .or_else(|| hunks.iter().enumerate().find(|(_, h)| h.first(side) <= n && u64::from(n) < end_u64(h)));
+        if let Some((h, hunk)) = found {
             let i = self.side_lines[f][h][side as usize].get((n - hunk.first(side)) as usize)?;
             return Some(&hunk.lines[*i as usize].text);
         }
-        let g = self.gaps[f][h];
+        let g = self.gaps[f].get(h).copied().or_else(|| self.gaps[f].last().copied())?;
         let off = n.checked_sub(if side == Side::Old { g.old } else { g.new })?;
         file.context_line(g.old.saturating_add(off), g.new.saturating_add(off))
     }
@@ -712,9 +718,12 @@ impl DiffState {
         let chunk = chunk.unwrap_or_else(|| {
             let mut text = String::new();
             let mut starts = Vec::with_capacity(CHUNK as usize + 1);
-            for m in c * CHUNK + 1..=(c + 1) * CHUNK {
+            let base = c * CHUNK + 1;
+            for i in 0..CHUNK {
                 starts.push(text.len() as u32);
-                text.push_str(self.side_line(f, side, m).unwrap_or(""));
+                if let Some(m) = base.checked_add(i) {
+                    text.push_str(self.side_line(f, side, m).unwrap_or(""));
+                }
                 text.push('\n');
             }
             starts.push(text.len() as u32);
@@ -772,9 +781,9 @@ impl DiffState {
             for gap in 0..=file.hunks.len() {
                 let g = self.gaps[f][gap];
                 let (top, bottom) = self.ui[f].revealed[gap];
-                let ctx = |k: u32| Row::Ctx { f: fu, old: g.old + k, new: g.new + k };
+                let ctx = |k: u32| Row::Ctx { f: fu, old: g.old.saturating_add(k), new: g.new.saturating_add(k) };
                 rows.extend((0..top).map(ctx));
-                let hidden = g.len.map(|n| n.saturating_sub(top + bottom));
+                let hidden = g.len.map(|n| n.saturating_sub(top.saturating_add(bottom)));
                 let first_row = rows.len() as u32;
                 if hidden.is_some_and(|n| n > 0) {
                     rows.push(Row::Gap { f: fu, gap: gap as u32 });
@@ -813,7 +822,16 @@ impl DiffState {
             }
         }
         self.row_of.clear();
-        let keys: Vec<String> = rows.iter().map(|&r| self.key_of(r)).collect();
+        let mut seen = HashMap::with_capacity(rows.len());
+        let keys: Vec<String> = rows
+            .iter()
+            .map(|&r| {
+                let base = self.key_of(r);
+                let n = seen.entry(base.clone()).or_insert(0u32);
+                *n += 1;
+                if *n == 1 { base } else { format!("{base}.{n}") }
+            })
+            .collect();
         if !self.visible_rows.is_empty() {
             if let Some(top) = self.keys.get(self.visible_rows.start)
                 && let Some(start) = keys.iter().position(|k| k == top)
@@ -878,7 +896,7 @@ fn gaps(f: &FileDiff) -> Vec<Gap> {
         old = h.end(Side::Old);
         new = h.end(Side::New);
     }
-    let len = f.old_len().map(|n| (n + 1).saturating_sub(old));
+    let len = f.old_len().map(|n| n.saturating_add(1).saturating_sub(old));
     out.push(Gap { old, new, len: if f.hunks.is_empty() { Some(0) } else { len } });
     out
 }
@@ -1024,5 +1042,50 @@ mod tests {
         assert_eq!(s.set_visible_rows(7..9), (Some(2), true));
         assert_eq!((s.visible_file(), s.sticky()), (2, Some(2)));
         assert_eq!(s.row_from(7, 25.0), Some(8));
+    }
+
+    #[test]
+    fn u32_max_hunks_and_overlapping_hunks_highlight_and_keep_unique_keys() {
+        let patch = concat!(
+            "diff --git a/f.rs b/f.rs\n",
+            "--- a/f.rs\n",
+            "+++ b/f.rs\n",
+            "@@ -4294967295,10 +4294967295,10 @@\n",
+            "-let old_a = 1;\n",
+            "-let old_b = 2;\n",
+            "+let new_a = 3;\n",
+            "+let new_b = 4;\n",
+            "@@ -10,2 +10,2 @@\n",
+            " let keep = 0;\n",
+            "-let a = 1;\n",
+            "+let b = 2;\n",
+            "@@ -10,2 +10,2 @@\n",
+            " let keep = 0;\n",
+            "-let dup_a = 1;\n",
+            "+let dup_b = 2;\n",
+        );
+        let mut s = DiffState::new(super::super::model::parse(patch));
+        let unique: std::collections::HashSet<&str> = s.keys.iter().map(String::as_str).collect();
+        assert_eq!(unique.len(), s.keys.len(), "unified keys must be unique: {:?}", s.keys);
+        assert_eq!(s.side_line(0, Side::Old, u32::MAX), Some("let old_a = 1;"));
+        assert!(!s.highlights(0, Side::Old, u32::MAX).is_empty(), "u32::MAX line in a Rust file gets syntax highlights");
+        assert!(!s.highlights(0, Side::New, u32::MAX).is_empty());
+
+        s.set_mode(DiffMode::Split);
+        let unique_split: std::collections::HashSet<&str> = s.keys.iter().map(String::as_str).collect();
+        assert_eq!(unique_split.len(), s.keys.len(), "split keys must be unique: {:?}", s.keys);
+
+        let mut rt = rune::Runtime::new(
+            s,
+            |st: &DiffState, _: &mut rune::Cx<DiffState>| {
+                let k = crate::Kit::neutral(true);
+                super::super::view::DiffView::new(|s: &DiffState| s, |s: &mut DiffState| s).build(st, &k)
+            },
+            (800.0, 600.0),
+            rune::Env::default(),
+        );
+        rt.frame(0.0);
+        rt.state.set_mode(DiffMode::Unified);
+        rt.frame(0.0);
     }
 }

@@ -100,9 +100,68 @@ fn a_page_mirror_does_not_change_while_the_page_scrolls() {
     assert!(rt.web_a11y(&mut mirror).is_none(), "scrolling the page leaves the mirror alone");
 }
 
+/// A page whose only change between frames is a colour, at a document offset that sits on a
+/// rounding boundary (100.05 points rounds the other way either side of it).
+fn tinted(tone: &u32, _: &mut Cx<u32>) -> El {
+    crate::col().w_full().role("main")
+        .child(crate::col().key("intro").role("region").label("Intro").w_full().h(100.05)
+            .child(crate::text("Rune").key("title").role("heading").level(1).font(crate::tok::type_::TITLE)))
+        .child(crate::text("A Rust UI framework.").key("lede").font(crate::tok::type_::BODY).selectable(true)
+            .fill(crate::Color::WHITE.alpha(f32::from(u8::try_from(*tone % 200).expect("byte")) / 400.0)))
+}
+
 #[test]
-fn href_presses_open_absolute_urls() {
-    let mut rt = Runtime::new((), page, (480.0, 300.0), Env::default());
+fn fractional_scroll_offsets_never_rewrite_a_page_mirror() {
+    let mut rt = Runtime::new(0u32, tinted, (480.0, 300.0), Env::new(true, 3.0));
+    rt.page_mode();
+    rt.frame(0.0);
+    let mut mirror = A11yMirror::default();
+    assert!(rt.web_a11y(&mut mirror).is_some());
+    // At `@3x` a scroll offset is a third of a pixel, so the band's offset and the document's
+    // position never add back exactly in `f32`. A commit that only redraws the band used to round
+    // an item's position the other way and rewrite the whole page's mirror.
+    for i in 1..20u32 {
+        let y = f32::from(u16::try_from(i).expect("small")) * 137.3333;
+        assert!(rt.set_page_scroll(y), "each offset is a new page position");
+        rt.state = i;
+        rt.frame(0.0);
+        assert!(rt.web_a11y(&mut mirror).is_none(), "the mirror changed at {y}");
+    }
+}
+
+/// A page with a wide code snippet in a horizontal viewport, as a site puts one.
+fn strip(_: &(), _: &mut Cx<()>) -> El {
+    crate::col().w_full().role("main")
+        .child(crate::row().key("scroll").w(200.0).h(40.0).scroll_x()
+            .child(crate::text("fn main() { println!(\"hello\"); }").key("code").w(600.0).h(40.0)
+                .font(crate::tok::type_::BODY).selectable(true)))
+}
+
+#[test]
+fn a_page_mirrors_a_horizontal_viewport_as_a_scroller_the_browser_scrolls() {
+    let mut rt = Runtime::new((), strip, (400.0, 300.0), Env::default());
+    rt.page_mode();
+    rt.frame(0.0);
+    let items = rt.web_a11y_items();
+    let scroll = items.iter().find(|i| i.kind == "scroll_x").expect("the strip mirrors as a scroller");
+    assert_eq!((scroll.tag, scroll.rect[0], scroll.rect[2]), (Some("div"), 0.0, 200.0));
+    let code = items.iter().find(|i| i.text.contains("println")).expect("the code still mirrors");
+    let placed = code.rect[0];
+    let mut mirror = A11yMirror::default();
+    assert!(rt.web_a11y(&mut mirror).is_some());
+
+    let path = scroll.path.clone();
+    assert!(rt.set_page_scroll_x(&path, 120.0), "the browser scrolled the strip");
+    rt.frame(0.0);
+    assert!(rt.web_a11y(&mut mirror).is_none(), "the container's own scroll leaves the mirror alone");
+    let after = rt.web_a11y_items();
+    let code = after.iter().find(|i| i.text.contains("println")).expect("the code still mirrors");
+    assert_eq!(code.rect[0], placed, "the text keeps its place inside the scroller");
+    assert!(!rt.set_page_scroll_x(&path, 120.0), "the same offset is no change");
+}
+
+#[test]
+fn href_presses_open_absolute_urls() {    let mut rt = Runtime::new((), page, (480.0, 300.0), Env::default());
     rt.frame(0.0);
     let gh = rt.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().path.clone();
     assert_eq!(rt.nodes.iter().find(|n| n.key.as_deref() == Some("gh")).unwrap().role, "link");

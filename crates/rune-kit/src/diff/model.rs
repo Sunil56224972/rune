@@ -753,7 +753,12 @@ mod tests {
         ];
         for patch in cases {
             let files = parse(patch);
-            let _ = crate::diff::DiffState::new(files);
+            let mut state = crate::diff::DiffState::new(files);
+            let unique: std::collections::HashSet<&str> = state.keys.iter().map(String::as_str).collect();
+            assert_eq!(unique.len(), state.keys.len());
+            state.set_mode(crate::diff::DiffMode::Split);
+            let unique_split: std::collections::HashSet<&str> = state.keys.iter().map(String::as_str).collect();
+            assert_eq!(unique_split.len(), state.keys.len());
         }
 
         // Fuzz-style random line soup of headers, hunks, escapes and markers.
@@ -789,10 +794,16 @@ mod tests {
             let patch: String = (0..len).map(|_| fragments[next(fragments.len())]).collect();
             let files = parse(&patch);
             let mut state = crate::diff::DiffState::new(files);
+            let unique: std::collections::HashSet<&str> = state.keys.iter().map(String::as_str).collect();
+            assert_eq!(unique.len(), state.keys.len());
             state.set_mode(crate::diff::DiffMode::Split);
+            let unique_split: std::collections::HashSet<&str> = state.keys.iter().map(String::as_str).collect();
+            assert_eq!(unique_split.len(), state.keys.len());
             for f in 0..state.files().len() {
                 let _ = state.side_line(f, Side::Old, 1);
                 let _ = state.side_line(f, Side::New, 1);
+                let _ = state.highlights(f, Side::Old, u32::MAX);
+                let _ = state.highlights(f, Side::New, u32::MAX);
             }
         }
     }
