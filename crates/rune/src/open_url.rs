@@ -54,6 +54,10 @@ pub(crate) fn check(url: &str) -> Result<String, OpenUrlError> { check_link(url,
 /// is relative to the page, and the browser resolves it.
 pub(crate) fn check_same_tab(url: &str) -> Result<String, OpenUrlError> { check_link(url, cfg!(target_arch = "wasm32")) }
 
+/// `check` for an HTML `<a href>` in the web mirror or a static `--html` export: `http:`,
+/// `https:`, `mailto:`, or a page-relative or fragment reference (`/docs`, `?q=a`, `#top`).
+pub(crate) fn check_href(url: &str) -> Result<String, OpenUrlError> { check_link(url, true) }
+
 fn check_link(url: &str, relative: bool) -> Result<String, OpenUrlError> {
     let url = url.trim();
     if url.is_empty() { return Err(OpenUrlError::Empty); }
@@ -64,7 +68,7 @@ fn check_link(url: &str, relative: bool) -> Result<String, OpenUrlError> {
     {
         return Err(OpenUrlError::Invalid);
     }
-    if relative && url.find([':', '/', '?', '#']).is_none_or(|i| url.as_bytes()[i] != b':') {
+    if relative && !url.starts_with("//") && url.find([':', '/', '?', '#']).is_none_or(|i| url.as_bytes()[i] != b':') {
         return Ok(url.to_owned());
     }
     let (scheme, rest) = url.split_once(':').ok_or(OpenUrlError::Invalid)?;
@@ -256,6 +260,7 @@ mod tests {
             assert_eq!(check_link(relative, false), Err(OpenUrlError::Invalid), "{relative:?}");
         }
         assert_eq!(check_link("javascript:alert(1)", true), Err(OpenUrlError::UnsupportedScheme("javascript".into())));
+        assert_eq!(check_link("//evil.com/path", true), Err(OpenUrlError::Invalid));
         assert_eq!(check_link("/a b", true), Err(OpenUrlError::Invalid));
         assert_eq!(check_link("HTTPS://example.com/x", true).as_deref(), Ok("https://example.com/x"));
         assert_eq!(check_same_tab("/notes/42"), Err(OpenUrlError::Invalid), "native has no page to resolve against");

@@ -256,6 +256,26 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   (`Some('a')` for ⌥A, which types `å`), for bindings by letter that follow the layout, as
   macOS's key bindings do; `None` where winit can't say (the web, iOS) and with no physical
   origin.
+
+  `Mods::cmd` is the primary shortcut modifier, reported with its key: ⌘ on macOS (with
+  `logo`), Ctrl elsewhere (with `ctrl`). So Ctrl+W on Windows is `{ cmd, ctrl }`, and a test
+  such as `cmd && !ctrl` never passes there. Bind shortcuts with a `Chord` instead, which
+  resolves both sides to the keys held on the platform:
+
+  ```rust
+  let reopen = Chord::parse("mod+shift+t")?;          // ⇧⌘T on macOS, Ctrl+Shift+T elsewhere
+  let next = Chord::parse("ctrl+tab")?;               // ⌃⇥ on macOS (a literal Control), Ctrl+Tab elsewhere
+  let home = Keybind::new("mod+b").on(KeyPlatform::Windows, "alt+home");
+  if reopen.matches_tx(ev, tx) { /* … */ }
+  reopen.label();                                     // "⇧⌘T" or "Ctrl+Shift+T"
+  ```
+
+  `mod` is the primary modifier; `ctrl`, `alt`, `shift` and `super` (`cmd`, `win`) are keys.
+  Off macOS Ctrl is the primary, so "mod+b" and "ctrl+b" are the same chord there
+  (`Chord::same_keys` finds such clashes); give one of them another chord on that platform
+  with `Keybind::on`. A character chord names the key unshifted ("mod+shift+[") and
+  `matches_tx` follows the layout through `tx.key_base()`. `Display` writes the canonical
+  string back for settings files, and `Keybind` parses alternatives ("mod+t, mod+n").
 - **Periodic motion**: `.looping(rune_motion::LoopSpec::opacity(..))` or `LoopSpec::rotation(period)`
   (icon quads). Tracks use animation time, preserve phase when retimed and only request frames
   while visible through ancestor clips. Removal uses the existing spring presence fade. Reduced
@@ -915,6 +935,17 @@ rune::App::new(spec).fit_content_height().run();
   `traffic_lights: Some((x, y))` places the close button's top-left at `x, y` points (Electron's
   `trafficLightPosition`). Rune places the buttons again after every resize, scale change, focus change
   and un-occlusion. On Windows and Linux both options do nothing; the system titlebar stays.
+- **`App::titlebar` / `WindowSpec::titlebar`** (`Titlebar::new(height)`): the app draws its own
+  titlebar `height` points tall and the window keeps its controls over it. macOS gets a full-size
+  content view with drag regions and the traffic lights centred in the band (unless
+  `Chrome::traffic_lights` places them). Windows loses its native title bar but keeps resize edges,
+  Aero Snap, the snap layouts flyout over maximize, the window menu (Alt+Space, or a right-click on a
+  `.window_drag()` region) and its animations; Rune draws the caption buttons over the trailing edge
+  (Electron's `titleBarOverlay`: 46 points wide, close turns red), as elements named Minimize,
+  Maximize or Restore, and Close for assistive technology. `Cx::chrome_insets()` says what the
+  controls take (`leading`, `trailing`, `height`; zero where the native frame stays, as on Linux),
+  `Cx::caption_color(c)` colours the caption symbols for an app theme, and `Tx::toggle_maximized()`
+  maximizes or restores. See `examples/custom_titlebar.rs`.
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
   that set a few more end with `..AppSpec::new(..)`. Window chrome lives on the builders, keeping
   existing exhaustive `AppSpec` literals source-compatible.
@@ -1611,9 +1642,14 @@ row().key("theme").child(text(theme_title(&s.theme)))
 - **Platforms**: macOS uses `NSMenu`'s `popUpMenuPositioningItem:atLocation:inView:` in windows
   and overlay panels. The menu tracks from a run-loop block outside winit's handler, so frames,
   springs, the display link and `AppHandle::update` keep running while it's open. The pointer's
-  press, capture and hover are released before it opens. Elsewhere `popup_menu_supported()` is
-  false and `on_pick` gets `None` on the next frame, so keep an in-app fallback for those
-  platforms. `cargo run -p rune --example popup_menu` shows both kinds.
+  press, capture and hover are released before it opens. Windows uses `TrackPopupMenuEx`, opened
+  from a message posted to the window after winit's handler returns, so Rune keeps drawing
+  there too. It follows Windows placement: the menu drops down below an element anchor (flipping
+  up clear of it near the screen's bottom edge) whether or not an item is `selected`, opens
+  with its top-left at a point, and sizes itself to its items; `.symbol` doesn't show. Keyboard
+  navigation and dismissal by a click outside (answered `None`) are the system's. Elsewhere
+  `popup_menu_supported()` is false and `on_pick` gets `None` on the next frame, so keep an
+  in-app fallback for those platforms. `cargo run -p rune --example popup_menu` shows both kinds.
 - **Headless**: `--tree` has a `popupMenu` object (items, anchor, `selected`, `queued`) while a
   menu is open, and `--trace` notes `popup-menu:open`, `popup-menu:pick:{id}` and
   `popup-menu:cancel`. Scripts answer it with `{"type": "menu-pick", "id": "dark"}` or
@@ -2328,8 +2364,8 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   resize delivers it (content at rest follows; unlike `Tx::resize_window`). The canvas keeps its
   size, so grow only after shrinking to see the whole window.
 - **Chords**: `{"type": "shortcut", "chord": "cmd+space"}` is the user pressing a chord
-  system-wide. Register it with `App::global_shortcut` or `register_shortcut`. Only its
-  shortcut handler runs, exactly as when the OS delivers it: it never reaches `on_key`,
+  system-wide (`mod+space` is ⌘ on macOS and Ctrl elsewhere, as in a `Chord`). Register it
+  with `App::global_shortcut` or `register_shortcut`. Only its shortcut handler runs, exactly as when the OS delivers it: it never reaches `on_key`,
   focused controls or physical-input handlers, even when the window is key. An unregistered
   chord fails the script. The older `{"shortcut": "cmd+k"}` has the same semantics. To send
   a window key instead, use `{"type": "key", "cmd": true, "name": " "}`.
